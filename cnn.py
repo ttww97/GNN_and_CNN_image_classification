@@ -1,120 +1,127 @@
-from __future__ import print_function
-import argparse
 import torch
+import torchvision
+import torchvision.transforms as transforms
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-from torchvision import datasets, transforms
 
-# Training settings
-parser = argparse.ArgumentParser(description='PyTorch MNIST Example')
-parser.add_argument('--batch-size', type=int, default=64, metavar='N',
-                    help='input batch size for training (default: 64)')
-parser.add_argument('--test-batch-size', type=int, default=1000, metavar='N',
-                    help='input batch size for testing (default: 1000)')
-parser.add_argument('--epochs', type=int, default=10, metavar='N',
-                    help='number of epochs to train (default: 10)')
-parser.add_argument('--lr', type=float, default=0.01, metavar='LR',
-                    help='learning rate (default: 0.01)')
-parser.add_argument('--momentum', type=float, default=0.5, metavar='M',
-                    help='SGD momentum (default: 0.5)')
-parser.add_argument('--no-cuda', action='store_true', default=False,
-                    help='disables CUDA training')
-parser.add_argument('--seed', type=int, default=1, metavar='S',
-                    help='random seed (default: 1)')
-parser.add_argument('--log-interval', type=int, default=100, metavar='N',
-                    help='how many batches to wait before logging training status')
-args = parser.parse_args()
-args.cuda = not args.no_cuda and torch.cuda.is_available()
+transform = transforms.Compose(
+    [transforms.ToTensor(),
+     transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
 
-torch.manual_seed(args.seed)
-if args.cuda:
-    torch.cuda.manual_seed(args.seed)
+trainset = torchvision.datasets.CIFAR10(root='./', train=True,
+                                        download=False, transform=transform)
 
+testset = torchvision.datasets.CIFAR10(root='./', train=False,
+                                       download=False, transform=transform)
 
-kwargs = {'num_workers': 1, 'pin_memory': True} if args.cuda else {}
-train_loader = torch.utils.data.DataLoader(
-    datasets.MNIST('./data', train=True, download=True,
-                   transform=transforms.Compose([
-                       transforms.ToTensor(),
-                       transforms.Normalize((0.1307,), (0.3081,))
-                   ])),
-    batch_size=args.batch_size, shuffle=True, **kwargs)
-test_loader = torch.utils.data.DataLoader(
-    datasets.MNIST('./data', train=False, transform=transforms.Compose([
-                       transforms.ToTensor(),
-                       transforms.Normalize((0.1307,), (0.3081,))
-                   ])),
-    batch_size=args.test_batch_size, shuffle=True, **kwargs)
+trainloader = torch.utils.data.DataLoader(trainset, batch_size=100,
+                                          shuffle=True, num_workers=2)
+
+testloader = torch.utils.data.DataLoader(testset, batch_size=100,
+                                         shuffle=False, num_workers=2)
+
+classes = ('plane', 'car', 'bird', 'cat',
+           'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
 
 
 class Net(nn.Module):
     def __init__(self):
         super(Net, self).__init__()
-        self.conv1 = nn.Conv2d(1, 10, kernel_size=5)
-        self.conv2 = nn.Conv2d(10, 20, kernel_size=5)
-        self.conv2_drop = nn.Dropout2d()
-        self.fc1 = nn.Linear(320, 50)
-        self.fc2 = nn.Linear(50, 10)
+        self.conv1 = nn.Conv2d(3, 64, 3, padding=1)
+        self.conv2 = nn.Conv2d(64, 64, 3, padding=1)
+        self.conv3 = nn.Conv2d(64, 128, 3, padding=1)
+        self.conv4 = nn.Conv2d(128, 128, 3, padding=1)
+        self.conv5 = nn.Conv2d(128, 256, 3, padding=1)
+        self.conv6 = nn.Conv2d(256, 256, 3, padding=1)
+        self.maxpool = nn.MaxPool2d(2, 2)
+        self.avgpool = nn.AvgPool2d(2, 2)
+        self.globalavgpool = nn.AvgPool2d(8, 8)
+        self.bn1 = nn.BatchNorm2d(64)
+        self.bn2 = nn.BatchNorm2d(128)
+        self.bn3 = nn.BatchNorm2d(256)
+        self.dropout50 = nn.Dropout(0.5)
+        self.dropout10 = nn.Dropout(0.1)
+        self.fc = nn.Linear(256, 10)
 
     def forward(self, x):
-        x = F.relu(F.max_pool2d(self.conv1(x), 2))
-        x = F.relu(F.max_pool2d(self.conv2_drop(self.conv2(x)), 2))
-        x = x.view(-1, 320)
-        x = F.relu(self.fc1(x))
-        x = F.dropout(x, training=self.training)
-        x = self.fc2(x)
-        return F.log_softmax(x, dim=1)
+        x = self.bn1(F.relu(self.conv1(x)))
+        x = self.bn1(F.relu(self.conv2(x)))
+        x = self.maxpool(x)
+        x = self.dropout10(x)
+        x = self.bn2(F.relu(self.conv3(x)))
+        x = self.bn2(F.relu(self.conv4(x)))
+        x = self.avgpool(x)
+        x = self.dropout10(x)
+        x = self.bn3(F.relu(self.conv5(x)))
+        x = self.bn3(F.relu(self.conv6(x)))
+        x = self.globalavgpool(x)
+        x = self.dropout50(x)
+        x = x.view(x.size(0), -1)
+        x = self.fc(x)
+        return x
 
-model = Net()
-if args.cuda:
-    model.cuda()
 
-optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
+net = Net()
 
-def train(epoch):
-    model.train()
-    correct = 0
-    train_loss = 0
-    for batch_idx, (data, target) in enumerate(train_loader):
-        if args.cuda:
-            data, target = data.cuda(), target.cuda()
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.Adam(net.parameters(), lr=0.001)
+
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+net.to(device)
+
+for epoch in range(1):
+    running_loss = 0.
+    batch_size = 100
+
+    for i, data in enumerate(
+            torch.utils.data.DataLoader(trainset, batch_size=batch_size,
+                                        shuffle=True, num_workers=2), 0):
+        inputs, labels = data
+        inputs, labels = inputs.to(device), labels.to(device)
+
         optimizer.zero_grad()
-        output = model(data)
-        loss = F.nll_loss(output, target)
-        train_loss += loss.item()
-        pred = output.data.max(1, keepdim=True)[1] # get the index of the max log-probability
-        correct += pred.eq(target.data.view_as(pred)).long().cpu().sum()
+
+        outputs = net(inputs)
+        loss = criterion(outputs, labels)
         loss.backward()
         optimizer.step()
-        if batch_idx % args.log_interval == 0:
-            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                epoch, batch_idx * len(data), len(train_loader.dataset),
-                100. * batch_idx / len(train_loader), loss.item()))
 
-    train_loss /= len(train_loader)
-    print('\nTrain set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)\n'.format(
-        train_loss, correct, len(train_loader.dataset),
-        100. * correct / len(train_loader.dataset)))
+        print('[%d, %5d] loss: %.4f' % (epoch + 1, (i + 1) * batch_size, loss.item()))
 
-def test():
-    model.eval()
-    test_loss = 0
-    correct = 0
-    for data, target in test_loader:
-        if args.cuda:
-            data, target = data.cuda(), target.cuda()
-        output = model(data)
-        test_loss += F.nll_loss(output, target, reduction='sum').item() # sum up batch loss
-        pred = output.data.max(1, keepdim=True)[1] # get the index of the max log-probability
-        correct += pred.eq(target.data.view_as(pred)).long().cpu().sum()
+print('Finished Training')
 
-    test_loss /= len(test_loader.dataset)
-    print('\nTest set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)\n'.format(
-        test_loss, correct, len(test_loader.dataset),
-        100. * correct / len(test_loader.dataset)))
+torch.save(net, 'cifar10.pkl')
+# net = torch.load('cifar10.pkl')
 
+correct = 0
+total = 0
+with torch.no_grad():
+    for data in testloader:
+        images, labels = data
+        images, labels = images.to(device), labels.to(device)
+        outputs = net(images)
+        _, predicted = torch.max(outputs.data, 1)
+        total += labels.size(0)
+        correct += (predicted == labels).sum().item()
 
-for epoch in range(1, args.epochs + 1):
-    train(epoch)
-    test()
+print('Accuracy of the network on the 10000 test images: %d %%' % (
+        100 * correct / total))
+
+class_correct = list(0. for i in range(10))
+class_total = list(0. for i in range(10))
+with torch.no_grad():
+    for data in testloader:
+        images, labels = data
+        images, labels = images.to(device), labels.to(device)
+        outputs = net(images)
+        _, predicted = torch.max(outputs, 1)
+        c = (predicted == labels).squeeze()
+        for i in range(4):
+            label = labels[i]
+            class_correct[label] += c[i].item()
+            class_total[label] += 1
+
+for i in range(10):
+    print('Accuracy of %5s : %2d %%' % (
+        classes[i], 100 * class_correct[i] / class_total[i]))
